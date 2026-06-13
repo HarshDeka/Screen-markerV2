@@ -1,32 +1,52 @@
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
+import java.awt.image.WritableRaster;
+import java.io.File;
+import java.util.Stack;
+import javax.imageio.ImageIO;
 import javax.swing.*;
 
-public class function extends JWindow { // Turned into a JWindow for absolute full-screen layering
+public class function extends JWindow {
     private BufferedImage drawingBuffer;
     private Graphics2D g2;
+    private JPanel canvasPanel; 
+
     private int lastX, lastY;
+    private int startX, startY; 
+    private int previewX, previewY; 
+    private boolean isDrawingShape = false;
     private boolean drawingEnabled = false; 
+    private String currentMode = "None";
+    
+    private JFrame mainToolbarFrame;
+    private String savedSnapshotDirectory = null;
+
+    private final Stack<BufferedImage> undoStack = new Stack<>();
+
+    private boolean isSmoothingEnabled = false;
+    private double smoothedX, smoothedY;
+    private final double SMOOTH_FACTOR = 0.25; 
+
+    private Color baseSelectedColor = Color.RED; 
+    private Color currentBrushColor = Color.RED; 
+    private float currentBrushThickness = 10.0f;
 
     public function() {
-        // Grab full monitor resolution
         Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
         setSize(screenSize);
         setLocation(0, 0);
         
-        // Ensure the window frame itself is completely transparent
         setBackground(new Color(0, 0, 0, 0)); 
         setAlwaysOnTop(true);
 
-        // Internal drawing panel setup
-        JPanel canvasPanel = new JPanel() {
+        canvasPanel = new JPanel() {
             @Override
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
                 Graphics2D g2d = (Graphics2D) g.create();
                 
-                // Forces the OS to register this as a mouse-intercepting surface
                 g2d.setComposite(AlphaComposite.SrcOver);
                 g2d.setColor(getBackground());
                 g2d.fillRect(0, 0, getWidth(), getHeight());
@@ -34,21 +54,71 @@ public class function extends JWindow { // Turned into a JWindow for absolute fu
                 if (drawingBuffer != null) {
                     g2d.drawImage(drawingBuffer, 0, 0, null);
                 }
+
+                if (isDrawingShape) {
+                    g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2d.setColor(currentBrushColor);
+                    g2d.setStroke(new BasicStroke(currentBrushThickness, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    
+                    int x = Math.min(startX, previewX);
+                    int y = Math.min(startY, previewY);
+                    int w = Math.abs(startX - previewX);
+                    int h = Math.abs(startY - previewY);
+
+                    if ("Line".equals(currentMode)) g2d.drawLine(startX, startY, previewX, previewY);
+                    else if ("Arrow".equals(currentMode)) drawArrowHead(g2d, startX, startY, previewX, previewY);
+                    else if ("Rect".equals(currentMode)) g2d.drawRect(x, y, w, h);
+                    else if ("Oval".equals(currentMode)) g2d.drawOval(x, y, w, h);
+                }
                 g2d.dispose();
             }
         };
 
         canvasPanel.setOpaque(false);
-        // Alpha value 1 catches clicks securely so you don't accidental-click desktop files
-        canvasPanel.setBackground(new Color(0, 0, 0, 1)); 
+        // FIX: Start with shield down so PC is usable immediately
+        canvasPanel.setBackground(new Color(0, 0, 0, 0)); 
 
         canvasPanel.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (drawingEnabled) {
                     initBufferIfNeeded();
-                    lastX = e.getX();
-                    lastY = e.getY();
+                    undoStack.push(cloneImage(drawingBuffer));
+                    if (undoStack.size() > 20) undoStack.remove(0); 
+
+                    startX = e.getX();
+                    startY = e.getY();
+                    lastX = startX;
+                    lastY = startY;
+                    smoothedX = startX;
+                    smoothedY = startY;
+                    
+                    if (isShapeMode(currentMode)) {
+                        isDrawingShape = true;
+                        previewX = startX;
+                        previewY = startY;
+                    }
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (drawingEnabled && isDrawingShape && g2 != null) {
+                    isDrawingShape = false;
+                    g2.setColor(currentBrushColor);
+                    g2.setStroke(new BasicStroke(currentBrushThickness, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    
+                    int x = Math.min(startX, e.getX());
+                    int y = Math.min(startY, e.getY());
+                    int w = Math.abs(startX - e.getX());
+                    int h = Math.abs(startY - e.getY());
+
+                    if ("Line".equals(currentMode)) g2.drawLine(startX, startY, e.getX(), e.getY());
+                    else if ("Arrow".equals(currentMode)) drawArrowHead(g2, startX, startY, e.getX(), e.getY());
+                    else if ("Rect".equals(currentMode)) g2.drawRect(x, y, w, h);
+                    else if ("Oval".equals(currentMode)) g2.drawOval(x, y, w, h);
+                    
+                    repaint();
                 }
             }
         });
@@ -57,12 +127,37 @@ public class function extends JWindow { // Turned into a JWindow for absolute fu
             @Override
             public void mouseDragged(MouseEvent e) {
                 if (drawingEnabled && g2 != null) {
-                    g2.setColor(Color.RED);
-                    g2.setStroke(new BasicStroke(5.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-                    g2.drawLine(lastX, lastY, e.getX(), e.getY());
-                    lastX = e.getX();
-                    lastY = e.getY();
-                    repaint(); 
+                    if (isShapeMode(currentMode)) {
+                        previewX = e.getX();
+                        previewY = e.getY();
+                        repaint();
+                    } else {
+                        Composite oldComposite = g2.getComposite();
+                        if ("High".equals(currentMode)) g2.setComposite(AlphaComposite.Src); 
+                        else if ("Eraser".equals(currentMode)) g2.setComposite(AlphaComposite.Clear); 
+                        
+                        g2.setColor(currentBrushColor);
+                        g2.setStroke(new BasicStroke(currentBrushThickness, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                        
+                        int nextX = e.getX();
+                        int nextY = e.getY();
+                        
+                        if (isSmoothingEnabled && !"Eraser".equals(currentMode)) {
+                            smoothedX = smoothedX + SMOOTH_FACTOR * (nextX - smoothedX);
+                            smoothedY = smoothedY + SMOOTH_FACTOR * (nextY - smoothedY);
+                            int currentX = (int) Math.round(smoothedX);
+                            int currentY = (int) Math.round(smoothedY);
+                            g2.drawLine(lastX, lastY, currentX, currentY);
+                            lastX = currentX;
+                            lastY = currentY;
+                        } else {
+                            g2.drawLine(lastX, lastY, nextX, nextY);
+                            lastX = nextX;
+                            lastY = nextY;
+                        }
+                        g2.setComposite(oldComposite); 
+                        repaint(); 
+                    }
                 }
             }
         });
@@ -70,11 +165,139 @@ public class function extends JWindow { // Turned into a JWindow for absolute fu
         setContentPane(canvasPanel);
     }
 
-    public void setDrawingEnabled(boolean enabled) {
-        this.drawingEnabled = enabled;
-        // CRITICAL FIX: If drawing is disabled, let clicks pass through to background files.
-        // If drawing is enabled, block input passes so you don't accidentally click files while marking!
-        this.setFocusable(enabled);
+    public void setMainToolbarFrame(JFrame frame) {
+        this.mainToolbarFrame = frame;
+    }
+
+    private boolean isShapeMode(String mode) {
+        return "Line".equals(mode) || "Arrow".equals(mode) || "Rect".equals(mode) || "Oval".equals(mode);
+    }
+
+    public void setBrushColor(Color newColor) {
+        this.baseSelectedColor = newColor;
+        setDrawingMode(this.currentMode); 
+    }
+
+    public void setDrawingMode(String mode) {
+        this.currentMode = mode;
+        if ("None".equals(mode)) {
+            this.drawingEnabled = false;
+            // FIX: Drops the invisible shield completely! Clicks pass through to VS Code/Desktop.
+            if (canvasPanel != null) canvasPanel.setBackground(new Color(0, 0, 0, 0)); 
+        } else {
+            this.drawingEnabled = true;
+            // Raises the shield to catch your mouse clicks for drawing
+            if (canvasPanel != null) canvasPanel.setBackground(new Color(0, 0, 0, 1)); 
+            
+            if ("Eraser".equals(mode)) currentBrushColor = new Color(0, 0, 0, 0); 
+            else if ("High".equals(mode)) currentBrushColor = new Color(baseSelectedColor.getRed(), baseSelectedColor.getGreen(), baseSelectedColor.getBlue(), 80); 
+            else currentBrushColor = baseSelectedColor;
+        }
+        if (canvasPanel != null) canvasPanel.repaint();
+    }
+
+    public void adjustBrushThickness(int rotation) {
+        currentBrushThickness -= rotation * 2.0f;
+        if (currentBrushThickness < 2.0f) currentBrushThickness = 2.0f;
+        if (currentBrushThickness > 80.0f) currentBrushThickness = 80.0f;
+    }
+
+    public int getBrushThickness() {
+        return (int) currentBrushThickness;
+    }
+
+    public void undoLastAction() {
+        if (drawingBuffer != null && !undoStack.isEmpty()) {
+            g2.dispose();
+            drawingBuffer = undoStack.pop();
+            g2 = drawingBuffer.createGraphics();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            repaint();
+        }
+    }
+
+    public void setSmoothingActive(boolean active) {
+        this.isSmoothingEnabled = active;
+    }
+
+    public void clearCanvas() {
+        if (g2 != null) {
+            initBufferIfNeeded();
+            undoStack.push(cloneImage(drawingBuffer)); 
+            g2.setComposite(AlphaComposite.Clear);
+            g2.fillRect(0, 0, drawingBuffer.getWidth(), drawingBuffer.getHeight());
+            g2.setComposite(AlphaComposite.SrcOver);
+            repaint();
+        }
+    }
+
+    private BufferedImage cloneImage(BufferedImage img) {
+        ColorModel cm = img.getColorModel();
+        boolean isAlphaPremultiplied = cm.isAlphaPremultiplied();
+        WritableRaster r = img.copyData(img.getRaster().createCompatibleWritableRaster());
+        return new BufferedImage(cm, r, isAlphaPremultiplied, null);
+    }
+
+    public void takeSnapshot() {
+        try {
+            this.setAlwaysOnTop(false);
+            if (mainToolbarFrame != null) mainToolbarFrame.setAlwaysOnTop(false);
+            this.setVisible(false);
+            if (mainToolbarFrame != null) mainToolbarFrame.setVisible(false);
+            Thread.sleep(150); 
+            
+            Robot robot = new Robot();
+            Rectangle screenRect = new Rectangle(Toolkit.getDefaultToolkit().getScreenSize());
+            BufferedImage screenFullImage = robot.createScreenCapture(screenRect);
+            
+            if (drawingBuffer != null) {
+                Graphics2D sg = screenFullImage.createGraphics();
+                sg.drawImage(drawingBuffer, 0, 0, null);
+                sg.dispose();
+            }
+
+            if (savedSnapshotDirectory == null) {
+                FileDialog fileDialog = new FileDialog((Frame) null, "Select Snapshot Default Folder", FileDialog.SAVE);
+                fileDialog.setFile("Select This Folder.png");
+                fileDialog.setVisible(true);
+                String directory = fileDialog.getDirectory();
+                if (directory != null) savedSnapshotDirectory = directory; 
+            }
+
+            if (savedSnapshotDirectory != null) {
+                String autoFileName = "Snapshot_" + System.currentTimeMillis() + ".png";
+                File fileToSave = new File(savedSnapshotDirectory, autoFileName);
+                ImageIO.write(screenFullImage, "png", fileToSave);
+            }
+            
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        } finally {
+            this.setVisible(true);
+            this.setAlwaysOnTop(true);
+            
+            if (mainToolbarFrame != null) {
+                mainToolbarFrame.setVisible(true);
+                mainToolbarFrame.setAlwaysOnTop(true);
+                mainToolbarFrame.toFront();
+                mainToolbarFrame.requestFocus();
+            }
+            this.toFront();
+        }
+    }
+
+    private void drawArrowHead(Graphics2D g2d, int x1, int y1, int x2, int y2) {
+        g2d.drawLine(x1, y1, x2, y2);
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double angle = Math.atan2(dy, dx);
+        int arrowSize = 18; 
+        int x3 = (int) (x2 - arrowSize * Math.cos(angle - Math.PI / 6));
+        int y3 = (int) (y2 - arrowSize * Math.sin(angle - Math.PI / 6));
+        int x4 = (int) (x2 - arrowSize * Math.cos(angle + Math.PI / 6));
+        int y4 = (int) (y2 - arrowSize * Math.sin(angle + Math.PI / 6));
+        g2d.drawLine(x2, y2, x3, y3);
+        g2d.drawLine(x2, y2, x4, y4);
     }
 
     private void initBufferIfNeeded() {
@@ -82,7 +305,6 @@ public class function extends JWindow { // Turned into a JWindow for absolute fu
             drawingBuffer = new BufferedImage(Math.max(1, getWidth()), Math.max(1, getHeight()), BufferedImage.TYPE_INT_ARGB);
             g2 = drawingBuffer.createGraphics();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            
             g2.setComposite(AlphaComposite.Clear);
             g2.fillRect(0, 0, drawingBuffer.getWidth(), drawingBuffer.getHeight());
             g2.setComposite(AlphaComposite.SrcOver);
