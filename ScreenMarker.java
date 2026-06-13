@@ -22,9 +22,10 @@ public class ScreenMarker extends JFrame {
 
         canvasLogic = new function();
         canvasLogic.setVisible(true);
-        canvasLogic.setMainToolbarFrame(this);
         
         toolbar = new ToolbarPanel();
+        
+        SwingUtilities.invokeLater(() -> canvasLogic.setMainToolbarFrame(this));
         palette = new ColorPalette(canvasLogic, toolbar); 
         
         int toolbarWidth = 450;  
@@ -141,7 +142,7 @@ public class ScreenMarker extends JFrame {
     }
 
     public static void main(String[] args) {
-        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) {}
+        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (ClassNotFoundException | InstantiationException | IllegalAccessException | UnsupportedLookAndFeelException ignored) {}
         SwingUtilities.invokeLater(() -> new ScreenMarker().setVisible(true));
     }
 }

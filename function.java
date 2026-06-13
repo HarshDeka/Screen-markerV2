@@ -4,6 +4,7 @@ import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.WritableRaster;
 import java.io.File;
+import java.io.IOException;
 import java.util.Stack;
 import javax.imageio.ImageIO;
 import javax.swing.*;
@@ -11,7 +12,7 @@ import javax.swing.*;
 public class function extends JWindow {
     private BufferedImage drawingBuffer;
     private Graphics2D g2;
-    private JPanel canvasPanel; 
+    private final JPanel canvasPanel; 
 
     private int lastX, lastY;
     private int startX, startY; 
@@ -65,10 +66,12 @@ public class function extends JWindow {
                     int w = Math.abs(startX - previewX);
                     int h = Math.abs(startY - previewY);
 
-                    if ("Line".equals(currentMode)) g2d.drawLine(startX, startY, previewX, previewY);
-                    else if ("Arrow".equals(currentMode)) drawArrowHead(g2d, startX, startY, previewX, previewY);
-                    else if ("Rect".equals(currentMode)) g2d.drawRect(x, y, w, h);
-                    else if ("Oval".equals(currentMode)) g2d.drawOval(x, y, w, h);
+                    switch (currentMode) {
+                        case "Line" -> g2d.drawLine(startX, startY, previewX, previewY);
+                        case "Arrow" -> drawArrowHead(g2d, startX, startY, previewX, previewY);
+                        case "Rect" -> g2d.drawRect(x, y, w, h);
+                        case "Oval" -> g2d.drawOval(x, y, w, h);
+                    }
                 }
                 g2d.dispose();
             }
@@ -113,10 +116,12 @@ public class function extends JWindow {
                     int w = Math.abs(startX - e.getX());
                     int h = Math.abs(startY - e.getY());
 
-                    if ("Line".equals(currentMode)) g2.drawLine(startX, startY, e.getX(), e.getY());
-                    else if ("Arrow".equals(currentMode)) drawArrowHead(g2, startX, startY, e.getX(), e.getY());
-                    else if ("Rect".equals(currentMode)) g2.drawRect(x, y, w, h);
-                    else if ("Oval".equals(currentMode)) g2.drawOval(x, y, w, h);
+                    switch (currentMode) {
+                        case "Line" -> g2.drawLine(startX, startY, e.getX(), e.getY());
+                        case "Arrow" -> drawArrowHead(g2, startX, startY, e.getX(), e.getY());
+                        case "Rect" -> g2.drawRect(x, y, w, h);
+                        case "Oval" -> g2.drawOval(x, y, w, h);
+                    }
                     
                     repaint();
                 }
@@ -189,9 +194,11 @@ public class function extends JWindow {
             // Raises the shield to catch your mouse clicks for drawing
             if (canvasPanel != null) canvasPanel.setBackground(new Color(0, 0, 0, 1)); 
             
-            if ("Eraser".equals(mode)) currentBrushColor = new Color(0, 0, 0, 0); 
-            else if ("High".equals(mode)) currentBrushColor = new Color(baseSelectedColor.getRed(), baseSelectedColor.getGreen(), baseSelectedColor.getBlue(), 80); 
-            else currentBrushColor = baseSelectedColor;
+            currentBrushColor = switch (mode) {
+                case "Eraser" -> new Color(0, 0, 0, 0);
+                case "High" -> new Color(baseSelectedColor.getRed(), baseSelectedColor.getGreen(), baseSelectedColor.getBlue(), 80);
+                default -> baseSelectedColor;
+            };
         }
         if (canvasPanel != null) canvasPanel.repaint();
     }
@@ -270,8 +277,8 @@ public class function extends JWindow {
                 ImageIO.write(screenFullImage, "png", fileToSave);
             }
             
-        } catch (Exception ex) {
-            ex.printStackTrace();
+        } catch (AWTException | IOException | InterruptedException ex) {
+            System.err.println("Error capturing screenshot: " + ex.getMessage());
         } finally {
             this.setVisible(true);
             this.setAlwaysOnTop(true);

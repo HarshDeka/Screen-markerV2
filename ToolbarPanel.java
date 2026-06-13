@@ -9,7 +9,7 @@ public class ToolbarPanel extends JPanel {
     private final Map<String, JToggleButton> modeButtons = new LinkedHashMap<>();
     private final Map<String, JButton> actionButtons = new LinkedHashMap<>();
     private final JButton colorButton = new JButton();
-    private DotIndicator dotIndicator; 
+    private final DotIndicator dotIndicator; 
 
     public ToolbarPanel() {
         setLayout(new BorderLayout(0, 0));
@@ -146,7 +146,9 @@ public class ToolbarPanel extends JPanel {
         b.setPreferredSize(new Dimension(36, 36));
         
         b.addMouseListener(new MouseAdapter() {
+            @Override
             public void mousePressed(MouseEvent e) { b.setBackground(new Color(255, 230, 240)); }
+            @Override
             public void mouseReleased(MouseEvent e) { b.setBackground(Color.WHITE); }
         });
     }
